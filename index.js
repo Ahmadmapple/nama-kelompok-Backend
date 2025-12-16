@@ -4,6 +4,7 @@ import morgan from "morgan";
 import cors from "cors";
 import dotenv from "dotenv";
 import authRouter from "./routes/authorisation/route_register.js";
+import userRouter from "./routes/route_user_profile.js"
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ app.use(helmet());
 app.use(morgan("dev"));
 
 app.use("/api/auth", authRouter);
+app.use("/api/user", userRouter )
 
 const port = process.env.PORT || 3000; 
 

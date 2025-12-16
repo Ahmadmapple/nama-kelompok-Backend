@@ -81,7 +81,7 @@ const registerUser = async (req, res) => {
         nama_pengguna,
         email_pengguna,
         password_hash_pengguna,
-        role_pengguna,
+        status_pengguna,
         setuju_newsletter
       )
       VALUES (
