@@ -12,7 +12,7 @@ const createArticle = async (req, res) => {
     tags, // ⬅️ masih string JSON dari FormData
   } = req.body;
 
-  const id_pengguna = req.user.id
+  const id_pengguna = req.user.id;
   // ===============================
   // FIX 1: parse tags
   // ===============================
@@ -72,41 +72,29 @@ const createArticle = async (req, res) => {
     // =======================================================
     // B. Handle Tags
     // =======================================================
+    // =======================================================
+    // B. Handle Tags (AMAN)
+    // =======================================================
     if (parsedTags.length > 0) {
       for (const tagName of parsedTags) {
-        let tagRows = await sql`
-          SELECT id_tag FROM public.data_tag WHERE nama_tag = ${tagName};
-        `;
+        if (!tagName || !tagName.trim()) continue;
 
-        let id_tag;
+        const tagResult = await sql`
+      INSERT INTO public.data_tag (nama_tag)
+      VALUES (${tagName})
+      ON CONFLICT (nama_tag)
+      DO UPDATE SET nama_tag = EXCLUDED.nama_tag
+      RETURNING id_tag;
+    `;
 
-        if (tagRows.length > 0) {
-          id_tag = tagRows[0].id_tag;
-        } else {
-          const insertResult = await sql`
-            INSERT INTO public.data_tag (nama_tag)
-            VALUES (${tagName})
-            RETURNING id_tag;
-          `;
-          id_tag = insertResult[0].id_tag;
-        }
+        const id_tag = tagResult[0].id_tag;
 
-        tagArticleLinks.push({ id_tag, id_artikel });
+        await sql`
+      INSERT INTO public.data_tag_artikel (id_tag, id_artikel)
+      VALUES (${id_tag}, ${id_artikel})
+      ON CONFLICT DO NOTHING;
+    `;
       }
-    }
-
-    // =======================================================
-    // C. Link Artikel - Tag
-    // =======================================================
-    if (tagArticleLinks.length > 0) {
-      await Promise.all(
-        tagArticleLinks.map((link) =>
-          sql`
-            INSERT INTO public.data_tag_artikel (id_tag, id_artikel)
-            VALUES (${link.id_tag}, ${link.id_artikel});
-          `
-        )
-      );
     }
 
     // =======================================================

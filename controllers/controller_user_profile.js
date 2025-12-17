@@ -137,10 +137,16 @@ const getExtendedProfile = async (req, res) => {
     const skills = skillsRaw
       ? [
           { name: "Pemahaman Bacaan", level: skillsRaw.pemahaman_bacaan || 0 },
-          { name: "Kecepatan Membaca", level: skillsRaw.kecepatan_membaca || 0 },
+          {
+            name: "Kecepatan Membaca",
+            level: skillsRaw.kecepatan_membaca || 0,
+          },
           { name: "Analisis Kritis", level: skillsRaw.analisis_kritis || 0 },
           { name: "Fact Checking", level: skillsRaw.fact_checking || 0 },
-          { name: "Menulis Ringkasan", level: skillsRaw.menulis_ringkasan || 0 },
+          {
+            name: "Menulis Ringkasan",
+            level: skillsRaw.menulis_ringkasan || 0,
+          },
         ]
       : [];
 
@@ -149,10 +155,23 @@ const getExtendedProfile = async (req, res) => {
       date: b.date ? b.date.toISOString().split("T")[0] : null,
     }));
 
-    const readingHistory = historyResult.map((item) => ({
-      ...item,
-      date: new Date(item.date).toLocaleDateString("id-ID", { day: "numeric", month: "short" }),
-    }));
+    const readingHistory = historyResult.map((item) => {
+      const utcDate = new Date(item.date + "Z"); // paksa dianggap UTC
+      return {
+        ...item,
+        date: utcDate
+          .toLocaleString("id-ID", {
+            timeZone: "Asia/Jakarta",
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          })
+          .replace(/\./g, ":"),
+      };
+    });
 
     // Weekly goals logic
     const weeklyGoals = [
@@ -185,7 +204,7 @@ const getBasicProfile = async (req, res) => {
         dp.xp_pengguna AS xp,
         dp.streak AS "currentStreak",
         dp.artikel_dibaca AS "articlesRead",
-        dp.waktu_membaca AS "readingTimeSeconds",
+        dp.waktu_membaca AS "totalMinutes", -- Kita beri alias totalMinutes agar jelas
         dp.kuis_diselesaikan AS "quizzesCompleted",
         dp.event_dihadiri AS "eventsAttended"
       FROM pengguna p
@@ -193,14 +212,25 @@ const getBasicProfile = async (req, res) => {
       WHERE p.id_pengguna = ${userId}
     `;
 
-    const coreStats = result[0];
-    if (!coreStats) return res.status(404).json({ message: "Profil tidak ditemukan." });
+    if (result.length === 0)
+      return res.status(404).json({ message: "Profil tidak ditemukan." });
 
-    // Convert reading time to string
-    const seconds = coreStats.readingTimeSeconds || 0;
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const readingTimeString = `${hours} jam ${minutes} menit`;
+    const coreStats = result[0];
+
+    // ================= FIX LOGIKA WAKTU =================
+    // Karena di DB kamu simpan dalam MENIT, maka rumusnya:
+    const totalMinutes = coreStats.totalMinutes || 0;
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = Math.floor(totalMinutes % 60);
+
+    // Format string agar lebih rapi
+    let readingTimeString = "";
+    if (hours > 0) {
+      readingTimeString = `${hours} jam ${minutes} menit`;
+    } else {
+      readingTimeString = `${minutes} menit`;
+    }
+    // ====================================================
 
     const xpToNextLevel = (coreStats.level + 1) * 1000;
 
@@ -217,10 +247,9 @@ const getBasicProfile = async (req, res) => {
       xpToNextLevel,
       currentStreak: coreStats.currentStreak,
       articlesRead: coreStats.articlesRead,
-      readingTime: readingTimeString,
+      readingTime: readingTimeString, // Sekarang akan menampilkan "5 menit" atau "1 jam 5 menit"
       quizzesCompleted: coreStats.quizzesCompleted,
       eventsAttended: coreStats.eventsAttended,
-      // Optional: send placeholders for arrays
       skills: [],
       badges: [],
       weeklyGoals: [],
@@ -233,7 +262,9 @@ const getBasicProfile = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Kesalahan server saat mengambil profil." });
+    res
+      .status(500)
+      .json({ message: "Kesalahan server saat mengambil profil." });
   }
 };
 

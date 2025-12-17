@@ -182,4 +182,89 @@ const addView = async (req, res) => {
   }
 };
 
-export { getArticles, getArticleById, addView, addLike };
+const addRiwayatBaca = async (req, res) => {
+  const { id: idArtikel } = req.params;
+  const idUser = req.user.id; // pastikan authenticate middleware
+
+  if (!idArtikel) {
+    return res.status(400).json({ message: "ID artikel diperlukan" });
+  }
+
+  try {
+    // 1️⃣ Ambil id_progres user
+    const progresResult = await sql`
+      SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = ${idUser}
+    `;
+
+    if (!progresResult.length) {
+      return res.status(404).json({ message: "Progres pengguna tidak ditemukan" });
+    }
+
+    const idProgres = progresResult[0].id_progres;
+
+    // 2️⃣ Insert atau update jika sudah ada
+    await sql`
+      INSERT INTO data_riwayat_bacaan (id_progres, id_artikel, tanggal_baca)
+      VALUES (${idProgres}, ${idArtikel}, NOW())
+      ON CONFLICT (id_progres, id_artikel)
+      DO UPDATE SET tanggal_baca = NOW()
+    `;
+
+    res.json({ message: "Riwayat baca berhasil dicatat" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Gagal mencatat riwayat baca" });
+  }
+};
+
+const updateProgresPengguna = async (req, res) => {
+  const idUser = req.user.id; 
+  const { durasi } = req.body;
+
+  const durasiMenit = parseInt(durasi) || 0;
+
+  try {
+    // 1. Update Progres Umum (Waktu & Jumlah Artikel)
+    await sql`
+      INSERT INTO data_progres_pengguna (id_pengguna, waktu_membaca, artikel_dibaca, skor_literasi_pengguna)
+      VALUES (${idUser}, ${durasiMenit}, 1, 0)
+      ON CONFLICT (id_pengguna)
+      DO UPDATE SET
+        waktu_membaca = data_progres_pengguna.waktu_membaca + EXCLUDED.waktu_membaca,
+        artikel_dibaca = data_progres_pengguna.artikel_dibaca + 1
+    `;
+
+    // 2. Update Detail Skill DAN Hitung Rata-rata Skor Utama
+    // Sesuai permintaan: Skor Utama = (Semua Skor Kemampuan) / 5
+    await sql`
+      WITH updated_detail AS (
+        UPDATE data_detail_kemampuan_literasi
+        SET 
+          pemahaman_bacaan = LEAST(pemahaman_bacaan + 2, 100),
+          kecepatan_membaca = LEAST(kecepatan_membaca + 1.5, 100)
+        WHERE id_progres = (
+          SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = ${idUser}
+        )
+        RETURNING *
+      )
+      UPDATE data_progres_pengguna
+      SET skor_literasi_pengguna = (
+        SELECT (pemahaman_bacaan + kecepatan_membaca + analisis_kritis + fact_checking + menulis_ringkasan) / 5
+        FROM updated_detail
+      )
+      WHERE id_pengguna = ${idUser};
+    `;
+
+    res.json({ 
+      success: true, 
+      message: "Progres diperbarui dan skor literasi dihitung ulang!" 
+    });
+
+  } catch (err) {
+    console.error("--- ERROR NEON DATABASE ---");
+    console.error(err.message);
+    res.status(500).json({ message: "Gagal update", error: err.message });
+  }
+};
+
+export { getArticles, getArticleById, addView, addLike, addRiwayatBaca, updateProgresPengguna };

@@ -93,10 +93,11 @@ const registerUser = async (req, res) => {
       )
     `;
 
-    await sendOTPService(normalizedEmail);
+    const otpToken = await sendOTPService(normalizedEmail)
 
     return res.status(201).json({
       message: "User berhasil didaftarkan, silakan verifikasi email Anda",
+      token: otpToken,
     });
   } catch (error) {
     console.error("Error during user registration:", error);
