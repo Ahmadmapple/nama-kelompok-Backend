@@ -1,5 +1,6 @@
 import sql from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
+import { updateUserStreak, checkAndUnlockBadges } from "../utils/streakHelper.js";
 
 // --- CONTROLLER 1: CREATE KUIS (Eksisting) ---
 const createKuis = async (req, res) => {
@@ -92,60 +93,299 @@ const getKuis = async (req, res) => {
 
 // --- CONTROLLER 3: SUBMIT KUIS RESULT (NEW) ---
 /**
- * Menyimpan hasil kuis ke tabel hasil_kuis dan data_riwayat_kuis
+ * Menyimpan hasil kuis ke tabel data_hasil_kuis dan data_riwayat_kuis
  */
 const submitKuisResult = async (req, res) => {
-  const { quizId, score, correctAnswers, totalQuestions } = req.body;
-  const userId = req.user.id;
+  const { quizId, score, totalQuestions, timeSpent } = req.body;
+  const userId = req.user?.id; // Optional - bisa null untuk guest
+  const isGuest = !userId;
+
+  console.log('Submit Quiz Result - Request Body:', { quizId, score, totalQuestions, timeSpent, userId, isGuest });
+
+  if (!quizId || score === undefined || !totalQuestions) {
+    console.log('Submit Quiz Result - Data tidak lengkap');
+    return res.status(400).json({ message: "Data tidak lengkap" });
+  }
+
+  // Jika guest, hanya return hasil tanpa menyimpan ke database
+  if (isGuest) {
+    console.log('Guest user - returning result without saving');
+    
+    // Hitung XP untuk ditampilkan (meskipun tidak disimpan)
+    const quizInfo = await sql`
+      SELECT kesulitan_kuis FROM data_kuis WHERE id_kuis = ${quizId}
+    `;
+    const difficulty = quizInfo[0]?.kesulitan_kuis || 'easy';
+    const correctAnswers = Math.round((score / 100) * totalQuestions);
+    const difficultyMultiplier = { 'easy': 1, 'medium': 1.5, 'hard': 2 };
+    const baseXP = correctAnswers * 10;
+    const xpEarned = Math.round(baseXP * (difficultyMultiplier[difficulty] || 1));
+
+    return res.status(200).json({ 
+      message: "Hasil kuis (Guest Mode - tidak disimpan)",
+      isGuest: true,
+      xpEarned,
+      score,
+      note: "Login untuk menyimpan hasil dan mendapatkan XP"
+    });
+  }
 
   try {
     await sql`BEGIN`;
+    console.log('Submit Quiz Result - Transaction started');
 
-    // 1. Simpan ke tabel hasil_kuis (Detail skor pengerjaan)
-    await sql`
-      INSERT INTO hasil_kuis (id_pengguna, id_kuis, skor, jawaban_benar, total_soal, tanggal_pengerjaan)
-      VALUES (${userId}, ${quizId}, ${score}, ${correctAnswers}, ${totalQuestions}, NOW())
+    // Ambil info kuis untuk menghitung XP dan kategori
+    const quizInfo = await sql`
+      SELECT kesulitan_kuis, kategori FROM data_kuis WHERE id_kuis = ${quizId}
     `;
 
-    // 2. Simpan/Update ke tabel data_riwayat_kuis (Untuk status 'Selesai' di UI)
-    // Menggunakan ON CONFLICT agar jika user mengerjakan ulang, riwayatnya terupdate ke skor terbaru
-    await sql`
-      INSERT INTO data_riwayat_kuis (id_pengguna, id_kuis, skor_terakhir, status_selesai, tanggal_terakhir)
-      VALUES (${userId}, ${quizId}, ${score}, TRUE, NOW())
-      ON CONFLICT (id_pengguna, id_kuis) 
-      DO UPDATE SET skor_terakhir = ${score}, tanggal_terakhir = NOW();
+    // Hitung XP berdasarkan score dan difficulty
+    const difficulty = quizInfo[0]?.kesulitan_kuis || 'easy';
+    const correctAnswers = Math.round((score / 100) * totalQuestions);
+    
+    // Formula XP: (jawaban benar * 10) * multiplier kesulitan
+    const difficultyMultiplier = {
+      'easy': 1,
+      'medium': 1.5,
+      'hard': 2
+    };
+    const baseXP = correctAnswers * 10;
+    const xpEarned = Math.round(baseXP * (difficultyMultiplier[difficulty] || 1));
+    
+    console.log('XP Calculation:', { correctAnswers, difficulty, baseXP, xpEarned });
+
+    // 1. Simpan ke tabel data_hasil_kuis (Detail skor pengerjaan)
+    const resultInsert = await sql`
+      INSERT INTO data_hasil_kuis (
+        id_pengguna, 
+        id_kuis, 
+        tanggal_selesai, 
+        total_waktu_pengerjaan_menit, 
+        total_skor_user, 
+        status_pengerjaan
+      )
+      VALUES (
+        ${userId}, 
+        ${quizId}, 
+        NOW(), 
+        ${timeSpent || 0}, 
+        ${score}, 
+        'selesai'
+      )
+      RETURNING id_hasil_kuis
     `;
+
+    // 2. Ambil id_progres user
+    const progressResult = await sql`
+      SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = ${userId}
+    `;
+
+    if (progressResult.length > 0) {
+      const idProgres = progressResult[0].id_progres;
+
+      // 3. Cek apakah ini kuis pertama kali dikerjakan
+      const existingQuiz = await sql`
+        SELECT id_kuis FROM data_riwayat_kuis 
+        WHERE id_progres = ${idProgres} AND id_kuis = ${quizId}
+      `;
+      
+      const isFirstTime = existingQuiz.length === 0;
+
+      // 4. Tambahkan ke riwayat (gunakan ON CONFLICT untuk menghindari duplicate)
+      await sql`
+        INSERT INTO data_riwayat_kuis (id_progres, id_kuis)
+        VALUES (${idProgres}, ${quizId})
+        ON CONFLICT (id_progres, id_kuis) DO NOTHING
+      `;
+
+      // 5. Update progress pengguna (increment kuis_diselesaikan dan tambah XP)
+      const currentProgress = await sql`
+        SELECT xp_pengguna, level_pengguna FROM data_progres_pengguna 
+        WHERE id_pengguna = ${userId}
+      `;
+
+      const currentXP = currentProgress[0]?.xp_pengguna || 0;
+      const currentLevel = currentProgress[0]?.level_pengguna || 1;
+      const newXP = currentXP + xpEarned;
+
+      // Formula level yang konsisten: Level 1 = 0-99 XP, Level 2 = 100-299 XP, Level 3 = 300-599 XP, dst
+      // XP requirement untuk level N = 100 * N
+      // Total XP untuk mencapai level N = 100 * (N-1) * N / 2
+      let newLevel = 1;
+      let totalXPNeeded = 0;
+      
+      while (totalXPNeeded <= newXP) {
+        totalXPNeeded += (newLevel * 100);
+        if (totalXPNeeded <= newXP) {
+          newLevel++;
+        }
+      }
+      
+      const leveledUp = newLevel > currentLevel;
+
+      await sql`
+        UPDATE data_progres_pengguna 
+        SET 
+          kuis_diselesaikan = kuis_diselesaikan + 1,
+          xp_pengguna = ${newXP},
+          level_pengguna = ${newLevel}
+        WHERE id_pengguna = ${userId}
+      `;
+
+      console.log('Progress Updated:', { 
+        oldXP: currentXP, 
+        newXP, 
+        oldLevel: currentLevel, 
+        newLevel, 
+        leveledUp 
+      });
+
+      // 6. Update literacy skills - hanya fact_checking dan analisis_kritis
+      // HANYA jika ini pertama kali mengerjakan kuis ini
+      // Menulis ringkasan akan diupdate saat user membuat artikel
+      if (isFirstTime) {
+        // Peningkatan skill: range 1-3 poin berdasarkan skor dan kesulitan
+        const skillDifficultyMultiplier = {
+          'easy': 1,
+          'medium': 1.5,
+          'hard': 2
+        };
+        
+        // Formula baru: 1 + (score/100 * 2) * multiplier
+        // Hasil: 1-3 poin (1 poin minimum, 3 poin maksimal untuk hard quiz dengan score 100)
+        const baseSkillIncrease = 1 + (score / 100) * 2; // 1-3 poin base
+        const skillIncrease = Math.min(3, baseSkillIncrease * (skillDifficultyMultiplier[difficulty] || 1));
+        
+        console.log('Literacy Skills Update (First Time):', { 
+          score, 
+          difficulty, 
+          skillIncrease: skillIncrease.toFixed(2),
+          isFirstTime 
+        });
+
+        // Update hanya fact_checking dan analisis_kritis
+        await sql`
+          UPDATE data_detail_kemampuan_literasi
+          SET 
+            analisis_kritis = LEAST(100, analisis_kritis + ${skillIncrease}),
+            fact_checking = LEAST(100, fact_checking + ${skillIncrease})
+          WHERE id_progres = ${idProgres}
+        `;
+
+        // Update skor literasi (rata-rata dari 5 kemampuan)
+        await sql`
+          UPDATE data_progres_pengguna dpp
+          SET skor_literasi_pengguna = (
+            SELECT (
+              dkl.pemahaman_bacaan + 
+              dkl.kecepatan_membaca + 
+              dkl.analisis_kritis + 
+              dkl.fact_checking + 
+              dkl.menulis_ringkasan
+            ) / 5
+            FROM data_detail_kemampuan_literasi dkl
+            WHERE dkl.id_progres = dpp.id_progres
+          )
+          WHERE dpp.id_pengguna = ${userId}
+        `;
+
+        console.log('Literacy skills updated successfully');
+      } else {
+        console.log('Quiz retake - skills not updated');
+      }
+      
+      // Update streak saat user menyelesaikan kuis
+      await updateUserStreak(userId);
+      
+      // Cek dan unlock badge jika memenuhi kriteria
+      const badgeResult = await checkAndUnlockBadges(userId);
+      console.log('Badge check result:', badgeResult);
+    }
 
     await sql`COMMIT`;
-    res.status(200).json({ message: "Hasil kuis berhasil disimpan!" });
+    res.status(200).json({ 
+      message: "Hasil kuis berhasil disimpan!",
+      resultId: resultInsert[0].id_hasil_kuis,
+      xpEarned,
+      newXP: progressResult.length > 0 ? (progressResult[0].xp_pengguna || 0) + xpEarned : xpEarned,
+      leveledUp: progressResult.length > 0 ? Math.floor(((progressResult[0].xp_pengguna || 0) + xpEarned) / 100) + 1 > (progressResult[0].level_pengguna || 1) : false
+    });
   } catch (error) {
     await sql`ROLLBACK`;
     console.error("Error submit kuis:", error);
-    res.status(500).json({ message: "Gagal menyimpan riwayat kuis." });
+    res.status(500).json({ message: "Gagal menyimpan hasil kuis.", error: error.message });
   }
 };
 
-// --- CONTROLLER 4: GET USER PROGRESS (NEW) ---
+// --- CONTROLLER 4: GET USER COMPLETED QUIZZES (NEW) ---
 /**
- * Mengambil riwayat kuis untuk user tertentu
+ * Mengambil daftar kuis yang sudah dikerjakan user
  */
-const getUserProgress = async (req, res) => {
-  const { userId } = req.user.id;
+const getUserCompletedQuizzes = async (req, res) => {
+  const userId = req.user.id;
 
   try {
-    // Ambil riwayat kuis yang pernah dikerjakan dari data_riwayat_kuis
-    const history = await sql`
-      SELECT id_kuis AS "quizId", skor_terakhir AS score, status_selesai AS completed, tanggal_terakhir AS "completedAt"
-      FROM data_riwayat_kuis
-      WHERE id_pengguna = ${userId}
+    // Ambil id_progres user
+    const progressResult = await sql`
+      SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = ${userId}
     `;
 
-    // Ambil statistik akumulasi (Opsional, sesuaikan dengan kebutuhan userStats di frontend)
+    if (progressResult.length === 0) {
+      return res.status(200).json({ completedQuizzes: [] });
+    }
+
+    const idProgres = progressResult[0].id_progres;
+
+    // Ambil daftar kuis yang sudah dikerjakan dari data_riwayat_kuis
+    const completedQuizzes = await sql`
+      SELECT rk.id_kuis AS "quizId"
+      FROM data_riwayat_kuis rk
+      WHERE rk.id_progres = ${idProgres}
+    `;
+
+    // Ubah ke format object untuk mudah dicek di frontend
+    const completedQuizzesMap = {};
+    completedQuizzes.forEach(item => {
+      completedQuizzesMap[item.quizId] = true;
+    });
+
+    res.status(200).json({ completedQuizzes: completedQuizzesMap });
+  } catch (error) {
+    console.error("Error get completed quizzes:", error);
+    res.status(500).json({ message: "Gagal mengambil daftar kuis yang sudah dikerjakan." });
+  }
+};
+
+// --- CONTROLLER 5: GET USER QUIZ HISTORY (NEW) ---
+/**
+ * Mengambil riwayat detail hasil kuis user
+ */
+const getUserQuizHistory = async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    // Ambil riwayat hasil kuis dengan detail kuis
+    const history = await sql`
+      SELECT 
+        hk.id_hasil_kuis AS id,
+        hk.id_kuis AS "quizId",
+        k.judul_kuis AS "quizTitle",
+        k.gambar AS "quizImage",
+        hk.total_skor_user AS score,
+        hk.tanggal_selesai AS "completedAt",
+        hk.total_waktu_pengerjaan_menit AS "timeSpent"
+      FROM data_hasil_kuis hk
+      JOIN data_kuis k ON k.id_kuis = hk.id_kuis
+      WHERE hk.id_pengguna = ${userId}
+      ORDER BY hk.tanggal_selesai DESC
+    `;
+
+    // Ambil statistik
     const statsResult = await sql`
       SELECT 
-        COUNT(id_kuis)::int AS "totalQuizzes",
-        AVG(skor_terakhir)::float AS "averageScore"
-      FROM data_riwayat_kuis
+        COUNT(*)::int AS "totalQuizzes",
+        AVG(total_skor_user)::float AS "averageScore"
+      FROM data_hasil_kuis
       WHERE id_pengguna = ${userId}
     `;
 
@@ -154,9 +394,9 @@ const getUserProgress = async (req, res) => {
       stats: statsResult[0] || { totalQuizzes: 0, averageScore: 0 }
     });
   } catch (error) {
-    console.error("Error get progress:", error);
-    res.status(500).json({ message: "Gagal mengambil progress user." });
+    console.error("Error get quiz history:", error);
+    res.status(500).json({ message: "Gagal mengambil riwayat kuis." });
   }
 };
 
-export { createKuis, getKuis, submitKuisResult, getUserProgress };
+export { createKuis, getKuis, submitKuisResult, getUserCompletedQuizzes, getUserQuizHistory };

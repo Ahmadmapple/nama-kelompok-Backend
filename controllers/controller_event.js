@@ -50,7 +50,7 @@ const createEvent = async (req, res) => {
         SELECT
           u.id_pengguna,
           u.nama_pengguna,
-          u.foto_pengguna
+          COALESCE(u.foto_pengguna, 'https://ui-avatars.com/api/?name=' || REPLACE(u.nama_pengguna, ' ', '+') || '&background=6366f1&color=fff')
         FROM pengguna u
         WHERE u.id_pengguna = ${id_pengguna}
           AND NOT EXISTS (SELECT 1 FROM existing)
@@ -267,55 +267,72 @@ const getEvent = async (req, res) => {
 
 const registerEvent = async (req, res) => {
   const { id_event } = req.params;
-  const id_pengguna = req.user.id; // Diambil dari middleware authenticate
-  const tanggal_daftar = new Date().toISOString().split('T')[0];
+  const id_pengguna = req.user.id;
+
+  console.log('Register Event - Request:', { id_event, id_pengguna });
 
   try {
-    // 1. Cek apakah user sudah terdaftar
-    const checkExist = await pool.query(
-      'SELECT * FROM data_partisipasi_event WHERE id_event = $1 AND id_pengguna = $2',
-      [id_event, id_pengguna]
-    );
+    await sql`BEGIN`;
 
-    if (checkExist.rows.length > 0) {
+    // 1. Cek apakah user sudah terdaftar
+    const checkExist = await sql`
+      SELECT * FROM data_partisipasi_event 
+      WHERE id_event = ${id_event} AND id_pengguna = ${id_pengguna}
+    `;
+
+    if (checkExist.length > 0) {
+      await sql`ROLLBACK`;
       return res.status(400).json({ message: 'Kamu sudah terdaftar di event ini' });
     }
 
     // 2. Ambil id_progres dari pengguna untuk riwayat
-    const progres = await pool.query(
-      'SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = $1',
-      [id_pengguna]
-    );
-    const id_progres = progres.rows[0].id_progres;
+    const progres = await sql`
+      SELECT id_progres FROM data_progres_pengguna 
+      WHERE id_pengguna = ${id_pengguna}
+    `;
 
-    // 3. Masukkan ke tabel partisipasi & riwayat (Gunakan Transaction agar aman)
-    await pool.query('BEGIN');
+    if (progres.length === 0) {
+      await sql`ROLLBACK`;
+      return res.status(404).json({ message: 'Data progres pengguna tidak ditemukan' });
+    }
+
+    const id_progres = progres[0].id_progres;
+
+    // 3. Simpan ke partisipasi (untuk status pembayaran)
+    await sql`
+      INSERT INTO data_partisipasi_event (id_event, id_pengguna, tanggal_daftar, status_pembayaran) 
+      VALUES (${id_event}, ${id_pengguna}, NOW(), 'lunas')
+    `;
+
+    // 4. Simpan ke riwayat (agar muncul di profil) - gunakan ON CONFLICT
+    await sql`
+      INSERT INTO data_riwayat_event (id_progres, id_event) 
+      VALUES (${id_progres}, ${id_event})
+      ON CONFLICT (id_progres, id_event) DO NOTHING
+    `;
     
-    // Simpan ke partisipasi (untuk status pembayaran)
-    await pool.query(
-      'INSERT INTO data_partisipasi_event (id_event, id_pengguna, tanggal_daftar, status_pembayaran) VALUES ($1, $2, $3, $4)',
-      [id_event, id_pengguna, tanggal_daftar, 'lunas'] // default lunas jika event gratis
-    );
+    // 5. Update jumlah partisipan di tabel event
+    await sql`
+      UPDATE data_event 
+      SET partisipan = partisipan + 1 
+      WHERE id_event = ${id_event}
+    `;
 
-    // Simpan ke riwayat (agar muncul di profil)
-    await pool.query(
-      'INSERT INTO data_riwayat_event (id_progres, id_event) VALUES ($1, $2)',
-      [id_progres, id_event]
-    );
-    
-    // Update jumlah partisipan di tabel event
-    await pool.query(
-      'UPDATE data_event SET partisipan = partisipan + 1 WHERE id_event = $1',
-      [id_event]
-    );
+    // 6. Update event_diikuti di progres pengguna
+    await sql`
+      UPDATE data_progres_pengguna 
+      SET event_dihadiri = event_dihadiri + 1 
+      WHERE id_pengguna = ${id_pengguna}
+    `;
 
-    await pool.query('COMMIT');
+    await sql`COMMIT`;
 
+    console.log('Register Event - Success');
     res.status(201).json({ message: 'Berhasil mendaftar event' });
   } catch (error) {
-    await pool.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ message: 'Gagal mendaftar event' });
+    await sql`ROLLBACK`;
+    console.error('Register Event - Error:', error);
+    res.status(500).json({ message: 'Gagal mendaftar event', error: error.message });
   }
 };
 
@@ -323,15 +340,32 @@ const getUserRegisteredEvents = async (req, res) => {
   const id_pengguna = req.user.id;
 
   try {
-    const result = await pool.query(
-      `SELECT e.* FROM data_event e
-       JOIN data_partisipasi_event p ON e.id_event = p.id_event
-       WHERE p.id_pengguna = $1`,
-      [id_pengguna]
-    );
-    res.status(200).json(result.rows);
+    const result = await sql`
+      SELECT 
+        e.id_event,
+        e.judul_event,
+        e.deskripsi,
+        e.gambar,
+        e.jenis_acara,
+        e.tanggal_acara,
+        e.biaya_acara,
+        e.partisipan,
+        e.status_acara,
+        p.tanggal_daftar,
+        p.status_pembayaran
+      FROM data_event e
+      JOIN data_partisipasi_event p ON e.id_event = p.id_event
+      WHERE p.id_pengguna = ${id_pengguna}
+      ORDER BY p.tanggal_daftar DESC
+    `;
+    
+    res.status(200).json({ 
+      message: 'Data event berhasil diambil',
+      events: result 
+    });
   } catch (error) {
-    res.status(500).json({ message: 'Gagal mengambil data event user' });
+    console.error('Get User Events - Error:', error);
+    res.status(500).json({ message: 'Gagal mengambil data event user', error: error.message });
   }
 };
 

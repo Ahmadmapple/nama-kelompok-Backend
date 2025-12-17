@@ -90,7 +90,7 @@ const getExtendedProfile = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    const [skillsResult, badgesResult, historyResult] = await Promise.all([
+    const [skillsResult, badgesResult, historyResult, eventsResult, quizResult] = await Promise.all([
       // Skills
       sql`
         SELECT
@@ -122,12 +122,48 @@ const getExtendedProfile = async (req, res) => {
           da.id_artikel AS id, 
           da.nama_artikel AS title,
           da.kategori AS category,
-          drb.tanggal_baca AS date
+          drb.tanggal_baca AS date,
+          100 AS progress
         FROM data_riwayat_bacaan drb
         JOIN data_artikel da ON drb.id_artikel = da.id_artikel
         JOIN data_progres_pengguna dpp ON drb.id_progres = dpp.id_progres
         WHERE dpp.id_pengguna = ${userId}
         ORDER BY drb.tanggal_baca DESC
+        LIMIT 5
+      `,
+
+      // Event registration history
+      sql`
+        SELECT
+          de.id_event AS id,
+          de.judul_event AS title,
+          de.jenis_acara AS type,
+          de.tanggal_acara AS date,
+          dpe.tanggal_daftar AS "registeredDate"
+        FROM data_partisipasi_event dpe
+        JOIN data_event de ON dpe.id_event = de.id_event
+        WHERE dpe.id_pengguna = ${userId}
+        ORDER BY dpe.tanggal_daftar DESC
+        LIMIT 5
+      `,
+
+      // Quiz history - ambil hanya entry terbaru per quiz untuk menghindari duplikat
+      sql`
+        WITH latest_quiz_attempts AS (
+          SELECT DISTINCT ON (dhk.id_kuis)
+            dhk.id_hasil_kuis AS id,
+            dk.judul_kuis AS title,
+            dhk.total_skor_user AS score,
+            dhk.tanggal_selesai AS date,
+            dhk.id_kuis
+          FROM data_hasil_kuis dhk
+          JOIN data_kuis dk ON dhk.id_kuis = dk.id_kuis
+          WHERE dhk.id_pengguna = ${userId}
+          ORDER BY dhk.id_kuis, dhk.tanggal_selesai DESC
+        )
+        SELECT id, title, score, date
+        FROM latest_quiz_attempts
+        ORDER BY date DESC
         LIMIT 5
       `,
     ]);
@@ -150,28 +186,48 @@ const getExtendedProfile = async (req, res) => {
         ]
       : [];
 
+    // Helper function untuk format tanggal lengkap
+    const formatFullDate = (dateString) => {
+      if (!dateString) return 'N/A';
+      const date = new Date(dateString + "Z"); // paksa dianggap UTC
+      return date.toLocaleString("id-ID", {
+        timeZone: "Asia/Jakarta",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+    };
+
     const badges = badgesResult.map((b) => ({
       ...b,
-      date: b.date ? b.date.toISOString().split("T")[0] : null,
+      date: b.date ? formatFullDate(b.date) : null,
     }));
 
-    const readingHistory = historyResult.map((item) => {
-      const utcDate = new Date(item.date + "Z"); // paksa dianggap UTC
-      return {
-        ...item,
-        date: utcDate
-          .toLocaleString("id-ID", {
-            timeZone: "Asia/Jakarta",
-            day: "numeric",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-          })
-          .replace(/\./g, ":"),
-      };
-    });
+    // Format reading history dengan tanggal lengkap
+    const readingHistory = historyResult.map((item) => ({
+      ...item,
+      date: formatFullDate(item.date),
+    }));
+
+    // Format event registration history dengan tanggal lengkap
+    const registeredEvents = eventsResult.map((event) => ({
+      id: event.id,
+      title: event.title,
+      type: event.type,
+      date: formatFullDate(event.date),
+      registeredDate: formatFullDate(event.registeredDate),
+    }));
+
+    // Format quiz history dengan tanggal lengkap
+    const quizHistory = quizResult.map((quiz) => ({
+      id: quiz.id,
+      title: quiz.title,
+      score: quiz.score,
+      date: formatFullDate(quiz.date),
+    }));
 
     // Weekly goals logic
     const weeklyGoals = [
@@ -180,7 +236,7 @@ const getExtendedProfile = async (req, res) => {
       { goal: "Selesaikan 5 kuis", completed: 0, target: 5, progress: 0 },
     ];
 
-    res.json({ skills, badges, weeklyGoals, readingHistory });
+    res.json({ skills, badges, weeklyGoals, readingHistory, registeredEvents, quizHistory });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Gagal mengambil extended profile" });
@@ -232,7 +288,23 @@ const getBasicProfile = async (req, res) => {
     }
     // ====================================================
 
-    const xpToNextLevel = (coreStats.level + 1) * 1000;
+    // Hitung XP yang dibutuhkan untuk level berikutnya
+    // Formula: Level N membutuhkan total XP = 100 * (N-1) * N / 2
+    // XP untuk naik ke level berikutnya = (level sekarang + 1) * 100
+    const currentLevel = coreStats.level || 1;
+    const currentXP = coreStats.xp || 0;
+    
+    // Hitung total XP yang sudah dikumpulkan untuk mencapai level saat ini
+    let totalXPForCurrentLevel = 0;
+    for (let i = 1; i < currentLevel; i++) {
+      totalXPForCurrentLevel += (i * 100);
+    }
+    
+    // XP yang dibutuhkan untuk naik ke level berikutnya
+    const xpNeededForNextLevel = currentLevel * 100;
+    
+    // XP progress dalam level saat ini
+    const xpInCurrentLevel = currentXP - totalXPForCurrentLevel;
 
     res.json({
       name: coreStats.name,
@@ -243,8 +315,8 @@ const getBasicProfile = async (req, res) => {
       literacyScore: coreStats.literacyScore,
       statusPengguna: coreStats.status_pengguna,
       level: coreStats.level,
-      xp: coreStats.xp,
-      xpToNextLevel,
+      xp: xpInCurrentLevel, // XP dalam level saat ini
+      xpToNextLevel: xpNeededForNextLevel, // Total XP yang dibutuhkan untuk level berikutnya
       currentStreak: coreStats.currentStreak,
       articlesRead: coreStats.articlesRead,
       readingTime: readingTimeString, // Sekarang akan menampilkan "5 menit" atau "1 jam 5 menit"

@@ -1,5 +1,6 @@
 // controllers/controller_get_articles.js
 import sql from "../config/db.js";
+import { updateUserStreak, checkAndUnlockBadges } from "../utils/streakHelper.js";
 
 // Get all articles
 const getArticles = async (req, res) => {
@@ -209,6 +210,12 @@ const addRiwayatBaca = async (req, res) => {
       ON CONFLICT (id_progres, id_artikel)
       DO UPDATE SET tanggal_baca = NOW()
     `;
+
+    // Update streak saat user membaca artikel
+    await updateUserStreak(idUser);
+    
+    // Cek dan unlock badge jika memenuhi kriteria
+    await checkAndUnlockBadges(idUser);
 
     res.json({ message: "Riwayat baca berhasil dicatat" });
   } catch (err) {

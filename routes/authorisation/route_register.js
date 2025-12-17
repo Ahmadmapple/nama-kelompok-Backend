@@ -18,17 +18,31 @@ router.post("/login", loginUser); //login user
 
 router.post("/send-otp", async (req, res) => {
   const { email } = req.body;
+  
+  console.log('Send OTP - Request for:', email);
+  
   try {
     const otpToken = await sendOTPService(email);
-    res.status(200).json({ message: "OTP Dikirim: ", token: otpToken });
+    console.log('Send OTP - Success, token generated');
+    res.status(200).json({ 
+      message: "OTP berhasil dikirim ke email Anda", 
+      verificationToken: otpToken 
+    });
   } catch (error) {
-    console.error("OTP gagal kirim: ", error);
-    res.status(500).json({ error: "OTP gagal kirim:" });
+    console.error("OTP gagal kirim:", error.message);
+    res.status(500).json({ error: "Gagal mengirim OTP" });
   }
 });
 
 router.post("/verify-otp", async (req, res) => {
   const { email, otp, token } = req.body;
+
+  console.log('Verify OTP - Request:', { 
+    email, 
+    otp, 
+    tokenReceived: !!token,
+    tokenLength: token?.length 
+  });
 
   try {
     const isVerified = await verifiedOTPService(email, otp, token);
@@ -36,10 +50,11 @@ router.post("/verify-otp", async (req, res) => {
     // mark user as verified in DB
     await sql`UPDATE pengguna SET is_verified = true WHERE email_pengguna = ${email}`;
 
+    console.log('Verify OTP - Success for:', email);
     res.status(200).json({ message: "OTP Verified Successfully", isVerified });
   } catch (error) {
-    console.error("OTP verification failed:", error);
-    res.status(400).json({ error: error.message }); // <-- send real error
+    console.error("OTP verification failed:", error.message);
+    res.status(400).json({ error: error.message });
   }
 });
 

@@ -13,8 +13,7 @@ router.post(
 
 router.get("/", getEvent);
 
-
-router.post('/register/:id', authenticate, registerEvent); //endpointnya berarti /api/event/id_event/register
+router.post('/:id_event/register', authenticate, registerEvent);
 
 router.get('/my-events', authenticate, getUserRegisteredEvents);
 

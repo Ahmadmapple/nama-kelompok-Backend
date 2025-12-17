@@ -98,6 +98,61 @@ const createArticle = async (req, res) => {
     }
 
     // =======================================================
+    // C. Update Menulis Ringkasan Skill
+    // =======================================================
+    // Ambil id_progres user
+    const progressResult = await sql`
+      SELECT id_progres FROM data_progres_pengguna WHERE id_pengguna = ${id_pengguna}
+    `;
+
+    if (progressResult.length > 0) {
+      const idProgres = progressResult[0].id_progres;
+      
+      // Hitung peningkatan berdasarkan panjang artikel dan kesulitan
+      // Range 1-3 poin
+      const wordCount = isi_artikel.split(/\s+/).length;
+      
+      // Formula: 1 + (min(wordCount, 500) / 500 * 2)
+      // 100 kata = 1.4 poin, 300 kata = 2.2 poin, 500+ kata = 3 poin
+      const baseIncrease = 1 + (Math.min(wordCount, 500) / 500) * 2;
+      
+      // Multiplier berdasarkan kesulitan
+      const difficultyMultiplier = {
+        'mudah': 1,
+        'menengah': 1.2,
+        'sulit': 1.5
+      };
+      
+      const skillIncrease = Math.min(3, baseIncrease * (difficultyMultiplier[kesulitan.toLowerCase()] || 1));
+      
+      // Update menulis_ringkasan
+      await sql`
+        UPDATE data_detail_kemampuan_literasi
+        SET menulis_ringkasan = LEAST(100, menulis_ringkasan + ${skillIncrease})
+        WHERE id_progres = ${idProgres}
+      `;
+      
+      // Update skor literasi (rata-rata dari 5 kemampuan)
+      await sql`
+        UPDATE data_progres_pengguna dpp
+        SET skor_literasi_pengguna = (
+          SELECT (
+            dkl.pemahaman_bacaan + 
+            dkl.kecepatan_membaca + 
+            dkl.analisis_kritis + 
+            dkl.fact_checking + 
+            dkl.menulis_ringkasan
+          ) / 5
+          FROM data_detail_kemampuan_literasi dkl
+          WHERE dkl.id_progres = dpp.id_progres
+        )
+        WHERE dpp.id_pengguna = ${id_pengguna}
+      `;
+      
+      console.log('Menulis ringkasan skill updated:', { wordCount, skillIncrease: skillIncrease.toFixed(2) });
+    }
+
+    // =======================================================
     // COMMIT
     // =======================================================
     await sql`COMMIT`;
