@@ -1,6 +1,6 @@
 import sql from "../../config/db.js";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import jwt from " ";
 import dotenv from "dotenv";
 dotenv.config();
 import { sendOTPService, sendResetLink } from "../../services/emailHandler.js";
@@ -9,12 +9,12 @@ const registerUser = async (req, res) => {
   const {
     email,
     name,
-    role,
     password,
     confirmPassword,
     agreeToTerms,
     newsletter,
   } = req.body;
+  const role = "user";
 
   if (!email || !name || !role || !password || !confirmPassword) {
     return res.status(400).json({
@@ -75,21 +75,26 @@ const registerUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const status_pengguna = "student";
 
     await sql`
       INSERT INTO pengguna (
         nama_pengguna,
         email_pengguna,
         password_hash_pengguna,
+        role_pengguna,
         status_pengguna,
-        setuju_newsletter
+        setuju_newsletter,
+        is_verified
       )
       VALUES (
         ${name},
         ${normalizedEmail},
         ${hashedPassword},
         ${role},
-        ${newsletter}
+        ${status_pengguna},
+        ${newsletter},
+        false
       )
     `;
 

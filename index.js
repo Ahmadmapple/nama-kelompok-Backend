@@ -1,8 +1,9 @@
+import dotenv from "dotenv";
+dotenv.config();
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import cors from "cors";
-import dotenv from "dotenv";
 import authRouter from "./routes/authorisation/route_register.js";
 import userRouter from "./routes/route_user_profile.js";
 import createRouter from "./routes/route_create_article.js";
@@ -12,7 +13,7 @@ import weeklyTargetRouter from "./routes/weeklyTarget.js";
 import adminRouter from "./routes/route_admin.js";
 import publicRouter from "./routes/route_public.js";
 
-dotenv.config();
+
 
 const app = express();
 app.use(cors());
