@@ -138,13 +138,74 @@ export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
+    await sql`BEGIN`;
+
+    await sql`
+      DELETE FROM data_riwayat_kuis drk
+      USING data_progres_pengguna dpp
+      WHERE drk.id_progres = dpp.id_progres
+      AND dpp.id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_riwayat_bacaan drb
+      USING data_progres_pengguna dpp
+      WHERE drb.id_progres = dpp.id_progres
+      AND dpp.id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_riwayat_event dre
+      USING data_progres_pengguna dpp
+      WHERE dre.id_progres = dpp.id_progres
+      AND dpp.id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_detail_kemampuan_literasi ddkl
+      USING data_progres_pengguna dpp
+      WHERE ddkl.id_progres = dpp.id_progres
+      AND dpp.id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_partisipasi_event
+      WHERE id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_hasil_kuis
+      WHERE id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM pengguna_lencana
+      WHERE id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_target_mingguan
+      WHERE id_pengguna = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_progres_pengguna
+      WHERE id_pengguna = ${id}
+    `;
+
     await sql`
       DELETE FROM pengguna
       WHERE id_pengguna = ${id}
     `;
 
+    await sql`COMMIT`;
+
     res.json({ message: 'User berhasil dihapus' });
   } catch (error) {
+    try {
+      await sql`ROLLBACK`;
+    } catch {
+    }
     console.error('Error deleting user:', error);
     res.status(500).json({ message: 'Gagal menghapus user' });
   }
