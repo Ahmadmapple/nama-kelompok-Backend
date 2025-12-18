@@ -53,11 +53,25 @@ export const verifiedOTPService = async (email, otp, token) => {
     throw new Error("Token OTP kedaluwarsa atau tidak valid");
   }
 
-  if (decoded.email !== email) {
+  // Normalize email untuk perbandingan
+  const normalizedEmail = email.toLowerCase().trim();
+  const decodedEmail = decoded.email.toLowerCase().trim();
+
+  if (decodedEmail !== normalizedEmail) {
     throw new Error("Email tidak cocok");
   }
 
-  if (decoded.otp !== otp.toString()) {
+  // Normalize OTP untuk perbandingan (hapus whitespace dan convert ke string)
+  const inputOTP = otp.toString().trim();
+  const decodedOTP = decoded.otp.toString().trim();
+
+  console.log('OTP Verification Debug:', {
+    inputOTP,
+    decodedOTP,
+    match: inputOTP === decodedOTP
+  });
+
+  if (decodedOTP !== inputOTP) {
     throw new Error("Kode OTP salah");
   }
 

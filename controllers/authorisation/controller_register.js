@@ -1,6 +1,6 @@
 import sql from "../../config/db.js";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import jwt from " ";
 import dotenv from "dotenv";
 dotenv.config();
 import { sendOTPService, sendResetLink } from "../../services/emailHandler.js";
@@ -98,10 +98,13 @@ const registerUser = async (req, res) => {
       )
     `;
 
-    await sendOTPService(normalizedEmail);
+    const otpToken = await sendOTPService(normalizedEmail);
+
+    console.log('Register - OTP Token generated for:', normalizedEmail);
 
     return res.status(201).json({
       message: "User berhasil didaftarkan, silakan verifikasi email Anda",
+      verificationToken: otpToken,
     });
   } catch (error) {
     console.error("Error during user registration:", error);
