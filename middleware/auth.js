@@ -19,11 +19,24 @@ export const authenticate = (req, res, next) => {
       email: decoded.email,
       name: decoded.name,
       role: decoded.role,
+      userId: decoded.id    // alias untuk kompatibilitas
     };
 
     next();
   } catch (error) {
     console.error("Auth middleware error:", error.message);
     return res.status(401).json({ message: "Token tidak valid" });
+  }
+};
+
+// Alias untuk authenticateToken
+export const authenticateToken = authenticate;
+
+// Middleware untuk memeriksa apakah user adalah admin
+export const isAdmin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    return res.status(403).json({ message: "Akses ditolak. Hanya admin yang diizinkan." });
   }
 };

@@ -307,6 +307,7 @@ const getBasicProfile = async (req, res) => {
     const xpInCurrentLevel = currentXP - totalXPForCurrentLevel;
 
     res.json({
+      id: userId,
       name: coreStats.name,
       email: coreStats.email,
       avatar: coreStats.avatar,

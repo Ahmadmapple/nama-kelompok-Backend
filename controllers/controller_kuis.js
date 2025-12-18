@@ -399,4 +399,98 @@ const getUserQuizHistory = async (req, res) => {
   }
 };
 
-export { createKuis, getKuis, submitKuisResult, getUserCompletedQuizzes, getUserQuizHistory };
+const updateKuisMetadata = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  const { title, description, category, difficulty, status } = req.body;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT id_pengguna
+      FROM data_kuis
+      WHERE id_kuis = ${id}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Kuis tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    await sql`
+      UPDATE data_kuis
+      SET
+        judul_kuis = COALESCE(${title}, judul_kuis),
+        deskripsi = COALESCE(${description}, deskripsi),
+        kategori = COALESCE(${category}, kategori),
+        kesulitan_kuis = COALESCE(${difficulty}, kesulitan_kuis),
+        status = COALESCE(${status}, status)
+      WHERE id_kuis = ${id}
+    `;
+
+    res.json({ message: "Kuis berhasil diperbarui" });
+  } catch (error) {
+    console.error("Error updating quiz metadata:", error);
+    res.status(500).json({ message: "Gagal memperbarui kuis" });
+  }
+};
+
+const deleteMyKuis = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT id_pengguna
+      FROM data_kuis
+      WHERE id_kuis = ${id}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Kuis tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    await sql`BEGIN`;
+
+    await sql`
+      DELETE FROM data_hasil_kuis
+      WHERE id_kuis = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_riwayat_kuis
+      WHERE id_kuis = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_kuis
+      WHERE id_kuis = ${id}
+    `;
+
+    await sql`COMMIT`;
+
+    res.json({ message: "Kuis berhasil dihapus" });
+  } catch (error) {
+    await sql`ROLLBACK`;
+    console.error("Error deleting quiz:", error);
+    res.status(500).json({ message: "Gagal menghapus kuis" });
+  }
+};
+
+export {
+  createKuis,
+  getKuis,
+  submitKuisResult,
+  getUserCompletedQuizzes,
+  getUserQuizHistory,
+  updateKuisMetadata,
+  deleteMyKuis,
+};

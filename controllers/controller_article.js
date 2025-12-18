@@ -274,4 +274,158 @@ const updateProgresPengguna = async (req, res) => {
   }
 };
 
-export { getArticles, getArticleById, addView, addLike, addRiwayatBaca, updateProgresPengguna };
+const updateArticleMetadata = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  const {
+    nama_artikel,
+    deskripsi,
+    kategori,
+    kesulitan,
+    perkiraan_waktu_menit,
+    tags,
+  } = req.body;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT id_pengguna
+      FROM data_artikel
+      WHERE id_artikel = ${id}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Artikel tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    const readTimeInt =
+      perkiraan_waktu_menit === undefined || perkiraan_waktu_menit === null
+        ? null
+        : parseInt(perkiraan_waktu_menit, 10);
+
+    let parsedTags = null;
+    if (tags !== undefined) {
+      if (Array.isArray(tags)) parsedTags = tags;
+      else if (typeof tags === "string") {
+        parsedTags = tags.trim().startsWith("[") ? JSON.parse(tags) : tags.split(",").map((t) => t.trim());
+      } else {
+        parsedTags = [];
+      }
+      parsedTags = parsedTags.filter((t) => t && String(t).trim()).map((t) => String(t).trim());
+    }
+
+    await sql`BEGIN`;
+
+    const [updated] = await sql`
+      UPDATE data_artikel
+      SET
+        nama_artikel = COALESCE(${nama_artikel}, nama_artikel),
+        deskripsi = COALESCE(${deskripsi}, deskripsi),
+        kategori = COALESCE(${kategori}, kategori),
+        kesulitan = COALESCE(${kesulitan}, kesulitan),
+        perkiraan_waktu_menit = COALESCE(${readTimeInt}, perkiraan_waktu_menit)
+      WHERE id_artikel = ${id}
+      RETURNING id_artikel
+    `;
+
+    if (parsedTags !== null) {
+      await sql`
+        DELETE FROM data_tag_artikel
+        WHERE id_artikel = ${id}
+      `;
+
+      for (const tagName of parsedTags) {
+        const tagResult = await sql`
+          INSERT INTO data_tag (nama_tag)
+          VALUES (${tagName})
+          ON CONFLICT (nama_tag)
+          DO UPDATE SET nama_tag = EXCLUDED.nama_tag
+          RETURNING id_tag
+        `;
+
+        const id_tag = tagResult[0].id_tag;
+        await sql`
+          INSERT INTO data_tag_artikel (id_tag, id_artikel)
+          VALUES (${id_tag}, ${id})
+          ON CONFLICT DO NOTHING
+        `;
+      }
+    }
+
+    await sql`COMMIT`;
+
+    res.json({ message: "Artikel berhasil diperbarui", id_artikel: updated.id_artikel });
+  } catch (err) {
+    await sql`ROLLBACK`;
+    console.error("Error updating article metadata:", err);
+    res.status(500).json({ message: "Gagal memperbarui artikel" });
+  }
+};
+
+const deleteMyArticle = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT id_pengguna
+      FROM data_artikel
+      WHERE id_artikel = ${id}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Artikel tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    await sql`BEGIN`;
+
+    await sql`
+      DELETE FROM data_riwayat_bacaan
+      WHERE id_artikel = ${id}
+    `;
+
+    await sql`
+      DELETE FROM artikel_likes
+      WHERE id_artikel = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_tag_artikel
+      WHERE id_artikel = ${id}
+    `;
+
+    await sql`
+      DELETE FROM data_artikel
+      WHERE id_artikel = ${id}
+    `;
+
+    await sql`COMMIT`;
+
+    res.json({ message: "Artikel berhasil dihapus" });
+  } catch (err) {
+    await sql`ROLLBACK`;
+    console.error("Error deleting article:", err);
+    res.status(500).json({ message: "Gagal menghapus artikel" });
+  }
+};
+
+export {
+  getArticles,
+  getArticleById,
+  addView,
+  addLike,
+  addRiwayatBaca,
+  updateProgresPengguna,
+  updateArticleMetadata,
+  deleteMyArticle,
+};

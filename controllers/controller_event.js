@@ -162,6 +162,160 @@ const createEvent = async (req, res) => {
   }
 };
 
+const updateEventMetadata = async (req, res) => {
+  const { id_event } = req.params;
+  const userId = req.user.id;
+
+  const { title, description, date, time, type, price, status, tags } = req.body;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT dp.id_pengguna
+      FROM data_event de
+      JOIN data_penyelenggara dp ON dp.id_penyelenggara = de.id_penyelenggara
+      WHERE de.id_event = ${id_event}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Event tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    let fullTimestamp = null;
+    if (date !== undefined || time !== undefined) {
+      if (!date || !time) {
+        return res.status(400).json({ message: "Tanggal dan waktu harus diisi" });
+      }
+      fullTimestamp = `${date} ${time}:00`;
+    }
+
+    let biaya = null;
+    if (price !== undefined) {
+      if (typeof price === "number") {
+        biaya = price;
+      } else if (typeof price === "string") {
+        if (price.toLowerCase() === "gratis") biaya = 0;
+        else biaya = Number(price.replace(/\D/g, "")) || 0;
+      } else {
+        biaya = 0;
+      }
+    }
+
+    let parsedTags = null;
+    if (tags !== undefined) {
+      if (Array.isArray(tags)) parsedTags = tags;
+      else if (typeof tags === "string") {
+        parsedTags = tags.trim().startsWith("[") ? JSON.parse(tags) : tags.split(",").map((t) => t.trim());
+      } else parsedTags = [];
+      parsedTags = parsedTags.filter((t) => t && String(t).trim()).map((t) => String(t).trim());
+    }
+
+    await sql`BEGIN`;
+
+    await sql`
+      UPDATE data_event
+      SET
+        judul_event = COALESCE(${title}, judul_event),
+        deskripsi = COALESCE(${description}, deskripsi),
+        jenis_acara = COALESCE(${type}, jenis_acara),
+        status_acara = COALESCE(${status}, status_acara),
+        tanggal_acara = COALESCE(${fullTimestamp}::timestamp, tanggal_acara),
+        waktu_acara = COALESCE(${fullTimestamp}::timestamp, waktu_acara),
+        biaya_acara = COALESCE(${biaya}, biaya_acara)
+      WHERE id_event = ${id_event}
+    `;
+
+    if (parsedTags !== null) {
+      await sql`
+        DELETE FROM data_tag_event
+        WHERE id_event = ${id_event}
+      `;
+
+      for (const tagName of parsedTags) {
+        const tagResult = await sql`
+          INSERT INTO data_tag (nama_tag)
+          VALUES (${tagName})
+          ON CONFLICT (nama_tag)
+          DO UPDATE SET nama_tag = EXCLUDED.nama_tag
+          RETURNING id_tag
+        `;
+
+        const id_tag = tagResult[0].id_tag;
+        await sql`
+          INSERT INTO data_tag_event (id_event, id_tag)
+          VALUES (${id_event}, ${id_tag})
+          ON CONFLICT DO NOTHING
+        `;
+      }
+    }
+
+    await sql`COMMIT`;
+
+    res.json({ message: "Event berhasil diperbarui" });
+  } catch (error) {
+    await sql`ROLLBACK`;
+    console.error("Error updating event:", error);
+    res.status(500).json({ message: "Gagal memperbarui event" });
+  }
+};
+
+const deleteMyEvent = async (req, res) => {
+  const { id_event } = req.params;
+  const userId = req.user.id;
+
+  try {
+    const ownerCheck = await sql`
+      SELECT dp.id_pengguna
+      FROM data_event de
+      JOIN data_penyelenggara dp ON dp.id_penyelenggara = de.id_penyelenggara
+      WHERE de.id_event = ${id_event}
+      LIMIT 1
+    `;
+
+    if (ownerCheck.length === 0) {
+      return res.status(404).json({ message: "Event tidak ditemukan" });
+    }
+
+    if (ownerCheck[0].id_pengguna !== userId) {
+      return res.status(403).json({ message: "Akses ditolak" });
+    }
+
+    await sql`BEGIN`;
+
+    await sql`
+      DELETE FROM data_partisipasi_event
+      WHERE id_event = ${id_event}
+    `;
+
+    await sql`
+      DELETE FROM data_riwayat_event
+      WHERE id_event = ${id_event}
+    `;
+
+    await sql`
+      DELETE FROM data_tag_event
+      WHERE id_event = ${id_event}
+    `;
+
+    await sql`
+      DELETE FROM data_event
+      WHERE id_event = ${id_event}
+    `;
+
+    await sql`COMMIT`;
+
+    res.json({ message: "Event berhasil dihapus" });
+  } catch (error) {
+    await sql`ROLLBACK`;
+    console.error("Error deleting event:", error);
+    res.status(500).json({ message: "Gagal menghapus event" });
+  }
+};
+
 // Fungsi untuk mengambil event (getEvent)
 const getEvent = async (req, res) => {
   try {
@@ -178,6 +332,7 @@ const getEvent = async (req, res) => {
         de.status_acara AS status,
 
         -- Ambil Nama dan Foto langsung dari tabel Pengguna
+        u.id_pengguna AS speaker_id,
         u.nama_pengguna AS speaker,
         u.foto_pengguna AS speaker_image_url, 
 
@@ -195,6 +350,7 @@ const getEvent = async (req, res) => {
 
       GROUP BY
         de.id_event,
+        u.id_pengguna,
         u.nama_pengguna,
         u.foto_pengguna
         
@@ -239,8 +395,10 @@ const getEvent = async (req, res) => {
         description: event.deskripsi,
         date,
         time,
+        dateRaw: event.tanggal_acara,
         type: event.type,
         category: event.tags.length > 0 ? event.tags[0] : (event.type.charAt(0).toUpperCase() + event.type.slice(1)),
+        speakerId: event.speaker_id,
         speaker: event.speaker,
         speakerImage: event.speaker_image_url, // <--- PASTIKAN BARIS INI ADA
         price,
@@ -369,4 +527,11 @@ const getUserRegisteredEvents = async (req, res) => {
   }
 };
 
-export { createEvent, getEvent, getUserRegisteredEvents, registerEvent };
+export {
+  createEvent,
+  getEvent,
+  getUserRegisteredEvents,
+  registerEvent,
+  updateEventMetadata,
+  deleteMyEvent,
+};
