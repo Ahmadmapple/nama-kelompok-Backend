@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import sql from "../config/db.js";
+import https from "https";
 
 dotenv.config();
 
@@ -17,6 +18,72 @@ const transporter = nodemailer.createTransport({
   greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 15000),
   socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
 });
+
+const sendEmail = async ({ to, subject, html }) => {
+  const resendApiKey = process.env.RESEND_API_KEY;
+
+  if (resendApiKey) {
+    const from = process.env.EMAIL_FROM || "No Reply <onboarding@resend.dev>";
+
+    const payload = JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      html,
+    });
+
+    const url = new URL("https://api.resend.com/emails");
+
+    return await new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          method: "POST",
+          hostname: url.hostname,
+          path: url.pathname,
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+          },
+          timeout: Number(process.env.RESEND_TIMEOUT || 15000),
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              return resolve(true);
+            }
+            return reject(
+              new Error(
+                `Resend API failed: ${res.statusCode} ${res.statusMessage} ${data}`
+              )
+            );
+          });
+        }
+      );
+
+      req.on("error", reject);
+      req.on("timeout", () => {
+        req.destroy(new Error("Resend API request timeout"));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  await transporter.sendMail({
+    from: `"No Reply" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html,
+  });
+
+  return true;
+};
 
 if (process.env.NODE_ENV !== "production") {
   transporter.verify((error) => {
@@ -42,8 +109,7 @@ export const sendOTPService = async (email) => {
     { expiresIn: "10m" }
   );
 
-  await transporter.sendMail({
-    from: `"No Reply" <${process.env.EMAIL_USER}>`,
+  await sendEmail({
     to: email,
     subject: "Kode Verifikasi Anda",
     html: `
@@ -93,7 +159,6 @@ export const verifiedOTPService = async (email, otp, token) => {
   return true;
 };
 
-
 export const sendResetLink = async (email) => {
   const user =
     await sql`
@@ -113,8 +178,7 @@ export const sendResetLink = async (email) => {
 
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
-  await transporter.sendMail({
-    from: `"No Reply" <${process.env.EMAIL_USER}>`,
+  await sendEmail({
     to: email,
     subject: "Reset Password",
     html: `
