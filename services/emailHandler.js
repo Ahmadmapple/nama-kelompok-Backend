@@ -6,73 +6,101 @@ import https from "https";
 
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: Number(process.env.SMTP_PORT || 465),
-  secure: String(process.env.SMTP_SECURE || "true") === "true",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-  connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 15000),
-  greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 15000),
-  socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
-});
+/**
+ * =========================================================
+ * CONFIG
+ * =========================================================
+ */
+const USE_RESEND = Boolean(process.env.RESEND_API_KEY);
 
+/**
+ * =========================================================
+ * SMTP TRANSPORTER (HANYA AKTIF JIKA TIDAK PAKAI RESEND)
+ * =========================================================
+ */
+let transporter = null;
+
+if (!USE_RESEND) {
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || "smtp.gmail.com",
+    port: 587,            // SAFE PORT
+    secure: false,        // WAJIB false untuk 587
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD, // APP PASSWORD
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+  });
+}
+
+/**
+ * =========================================================
+ * SEND EMAIL (RESEND / SMTP)
+ * =========================================================
+ */
 const sendEmail = async ({ to, subject, html }) => {
-  const resendApiKey = process.env.RESEND_API_KEY;
-
-  if (resendApiKey) {
-    const from = process.env.EMAIL_FROM || "No Reply <onboarding@resend.dev>";
-
+  /**
+   * ======================
+   * RESEND (RAILWAY SAFE)
+   * ======================
+   */
+  if (USE_RESEND) {
     const payload = JSON.stringify({
-      from,
+      from: process.env.EMAIL_FROM || "No Reply <onboarding@resend.dev>",
       to: [to],
       subject,
       html,
     });
 
-    const url = new URL("https://api.resend.com/emails");
-
     return await new Promise((resolve, reject) => {
       const req = https.request(
         {
           method: "POST",
-          hostname: url.hostname,
-          path: url.pathname,
+          hostname: "api.resend.com",
+          path: "/emails",
           headers: {
-            Authorization: `Bearer ${resendApiKey}`,
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(payload),
           },
-          timeout: Number(process.env.RESEND_TIMEOUT || 15000),
+          timeout: 10000,
         },
         (res) => {
           let data = "";
-          res.on("data", (chunk) => {
-            data += chunk;
-          });
+          res.on("data", (chunk) => (data += chunk));
           res.on("end", () => {
-            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-              return resolve(true);
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              resolve(true);
+            } else {
+              reject(
+                new Error(
+                  `Resend error: ${res.statusCode} ${res.statusMessage} ${data}`
+                )
+              );
             }
-            return reject(
-              new Error(
-                `Resend API failed: ${res.statusCode} ${res.statusMessage} ${data}`
-              )
-            );
           });
         }
       );
 
       req.on("error", reject);
       req.on("timeout", () => {
-        req.destroy(new Error("Resend API request timeout"));
+        req.destroy(new Error("Resend request timeout"));
       });
 
       req.write(payload);
       req.end();
     });
+  }
+
+  /**
+   * ======================
+   * SMTP (LOCAL / VPS)
+   * ======================
+   */
+  if (!transporter) {
+    throw new Error("SMTP transporter not initialized");
   }
 
   await transporter.sendMail({
@@ -85,16 +113,11 @@ const sendEmail = async ({ to, subject, html }) => {
   return true;
 };
 
-if (process.env.NODE_ENV !== "production") {
-  transporter.verify((error) => {
-    if (error) {
-      console.error("Transporter verification failed:", error);
-    } else {
-      console.log("Transporter verification successful");
-    }
-  });
-}
-
+/**
+ * =========================================================
+ * SEND OTP
+ * =========================================================
+ */
 export const sendOTPService = async (email) => {
   const user =
     await sql`SELECT id_pengguna FROM pengguna WHERE email_pengguna = ${email} LIMIT 1`;
@@ -122,49 +145,43 @@ export const sendOTPService = async (email) => {
   return token;
 };
 
+/**
+ * =========================================================
+ * VERIFY OTP
+ * =========================================================
+ */
 export const verifiedOTPService = async (email, otp, token) => {
-  if (!token) {
-    throw new Error("Token OTP tidak ditemukan");
-  }
+  if (!token) throw new Error("Token OTP tidak ditemukan");
 
   let decoded;
   try {
     decoded = jwt.verify(token, process.env.OTP_SECRET);
-  } catch (err) {
+  } catch {
     throw new Error("Token OTP kedaluwarsa atau tidak valid");
   }
 
-  // Normalize email untuk perbandingan
-  const normalizedEmail = email.toLowerCase().trim();
-  const decodedEmail = decoded.email.toLowerCase().trim();
-
-  if (decodedEmail !== normalizedEmail) {
+  if (decoded.email.toLowerCase().trim() !== email.toLowerCase().trim()) {
     throw new Error("Email tidak cocok");
   }
 
-  // Normalize OTP untuk perbandingan (hapus whitespace dan convert ke string)
-  const inputOTP = otp.toString().trim();
-  const decodedOTP = decoded.otp.toString().trim();
-
-  console.log('OTP Verification Debug:', {
-    inputOTP,
-    decodedOTP,
-    match: inputOTP === decodedOTP
-  });
-
-  if (decodedOTP !== inputOTP) {
+  if (decoded.otp.toString().trim() !== otp.toString().trim()) {
     throw new Error("Kode OTP salah");
   }
 
   return true;
 };
 
+/**
+ * =========================================================
+ * SEND RESET PASSWORD LINK
+ * =========================================================
+ */
 export const sendResetLink = async (email) => {
   const user =
     await sql`
-      SELECT id_pengguna 
-      FROM pengguna 
-      WHERE email_pengguna = ${email} 
+      SELECT id_pengguna
+      FROM pengguna
+      WHERE email_pengguna = ${email}
       LIMIT 1
     `;
 
