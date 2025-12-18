@@ -93,9 +93,20 @@ const registerUser = async (req, res) => {
       )
     `;
 
-    const otpToken = await sendOTPService(normalizedEmail);
+    let otpToken;
+    try {
+      otpToken = await sendOTPService(normalizedEmail);
+      console.log("Register - OTP Token generated for:", normalizedEmail);
+    } catch (otpError) {
+      console.error("Register - Failed to send OTP:", otpError);
+    }
 
-    console.log('Register - OTP Token generated for:', normalizedEmail);
+    if (!otpToken) {
+      return res.status(201).json({
+        message:
+          "User berhasil didaftarkan, namun gagal mengirim OTP. Silakan kirim ulang OTP.",
+      });
+    }
 
     return res.status(201).json({
       message: "User berhasil didaftarkan, silakan verifikasi email Anda",
