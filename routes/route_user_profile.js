@@ -6,6 +6,7 @@ import {
 } from "../controllers/controller_user_profile.js";
 import upload from "../services/multerUpload.js";
 import { authenticate } from "../middleware/auth.js";
+import multer from "multer";
 
 const router = express.Router();
 
@@ -14,6 +15,20 @@ router.put(
   "/edit-profile",
   authenticate,
   upload.single("avatar"),
+  (err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ message: "file harus berukuran < 2mb" });
+      }
+      return res.status(400).json({ message: err.message });
+    }
+
+    if (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    return next();
+  },
   editProfile
 );
 
