@@ -6,12 +6,27 @@ import sql from "../config/db.js";
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-  service: "Gmail",
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
-    },
+  host: process.env.SMTP_HOST || "smtp.gmail.com",
+  port: Number(process.env.SMTP_PORT || 465),
+  secure: String(process.env.SMTP_SECURE || "true") === "true",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD,
+  },
+  connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 15000),
+  greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 15000),
+  socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
 });
+
+if (process.env.NODE_ENV !== "production") {
+  transporter.verify((error) => {
+    if (error) {
+      console.error("Transporter verification failed:", error);
+    } else {
+      console.log("Transporter verification successful");
+    }
+  });
+}
 
 export const sendOTPService = async (email) => {
   const user =
