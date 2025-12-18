@@ -1,11 +1,12 @@
+import dotenv from "dotenv";
+dotenv.config();
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import cors from "cors";
-import dotenv from "dotenv";
 import authRouter from "./routes/authorisation/route_register.js";
 
-dotenv.config();
+
 
 const app = express();
 app.use(cors());
