@@ -7,11 +7,16 @@ dotenv.config();
 
 // 1. Setup Nodemailer Transporter (Specifically for Gmail)
 const transporter = nodemailer.createTransport({
-  service: "gmail", // specific service setting helps avoid port issues
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false, // Must be false for port 587
   auth: {
-    user: process.env.EMAIL_USER, // Your Gmail address
-    pass: process.env.EMAIL_PASSWORD, // Your 16-char App Password (NOT your login password)
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD, // 16-character App Password
   },
+  tls: {
+    rejectUnauthorized: false // Helps bypass potential certificate issues in containers
+  }
 });
 
 // 2. Simplified sendEmail function
