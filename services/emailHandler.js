@@ -2,7 +2,6 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import sql from "../config/db.js";
-import https from "https";
 
 dotenv.config();
 
@@ -17,54 +16,6 @@ const transporter = nodemailer.createTransport({
 
 // 2. Simplified sendEmail function
 const sendEmail = async ({ to, subject, html }) => {
-  const gatewayUrl = process.env.EMAIL_GATEWAY_URL;
-  const gatewayApiKey = process.env.EMAIL_GATEWAY_API_KEY;
-
-  if (gatewayUrl) {
-    const payload = JSON.stringify({ to, subject, html });
-    const url = new URL(gatewayUrl);
-
-    return await new Promise((resolve, reject) => {
-      const req = https.request(
-        {
-          method: "POST",
-          hostname: url.hostname,
-          path: `${url.pathname}${url.search}`,
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
-            "x-api-key": gatewayApiKey || "",
-          },
-          timeout: Number(process.env.EMAIL_GATEWAY_TIMEOUT || 15000),
-        },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk) => {
-            data += chunk;
-          });
-          res.on("end", () => {
-            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-              return resolve(true);
-            }
-            return reject(
-              new Error(
-                `Email gateway failed: ${res.statusCode} ${res.statusMessage} ${data}`
-              )
-            );
-          });
-        }
-      );
-
-      req.on("error", reject);
-      req.on("timeout", () => {
-        req.destroy(new Error("Email gateway request timeout"));
-      });
-
-      req.write(payload);
-      req.end();
-    });
-  }
-
   try {
     // We use 'await' to ensure Vercel doesn't kill the process before sending
     await transporter.sendMail({
@@ -95,27 +46,37 @@ if (process.env.NODE_ENV !== "production") {
 // ... The rest of your logic (OTP Service, Verification, Reset Link) remains exactly the same ...
 
 export const sendOTPService = async (email) => {
-  const user = await sql`SELECT id_pengguna FROM pengguna WHERE email_pengguna = ${email} LIMIT 1`;
+  const normalizedEmail = (email || "").toLowerCase().trim();
+  const user = await sql`SELECT id_pengguna FROM pengguna WHERE email_pengguna = ${normalizedEmail} LIMIT 1`;
 
   if (!user.length) throw new Error("User not found");
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
   const token = jwt.sign(
-    { email, otp },
+    { email: normalizedEmail, otp },
     process.env.OTP_SECRET,
     { expiresIn: "10m" }
   );
 
-  await sendEmail({
-    to: email,
-    subject: "Kode Verifikasi Anda",
-    html: `
-      <p>Kode OTP Anda:</p>
-      <h2>${otp}</h2>
-      <p>Berlaku selama <b>10 menit</b>.</p>
-    `,
-  });
+  const debugOtpEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+
+  try {
+    await sendEmail({
+      to: normalizedEmail,
+      subject: "Kode Verifikasi Anda",
+      html: `
+        <p>Kode OTP Anda:</p>
+        <h2>${otp}</h2>
+        <p>Berlaku selama <b>10 menit</b>.</p>
+      `,
+    });
+  } catch (error) {
+    if (!debugOtpEnabled) {
+      throw error;
+    }
+    console.error("OTP email send failed (debug mode enabled):", error);
+  }
 
   return token;
 };
@@ -132,7 +93,7 @@ export const verifiedOTPService = async (email, otp, token) => {
     throw new Error("Token OTP kedaluwarsa atau tidak valid");
   }
 
-  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedEmail = (email || "").toLowerCase().trim();
   const decodedEmail = decoded.email.toLowerCase().trim();
 
   if (decodedEmail !== normalizedEmail) {
@@ -150,10 +111,11 @@ export const verifiedOTPService = async (email, otp, token) => {
 };
 
 export const sendResetLink = async (email) => {
+  const normalizedEmail = (email || "").toLowerCase().trim();
   const user = await sql`
       SELECT id_pengguna 
       FROM pengguna 
-      WHERE email_pengguna = ${email} 
+      WHERE email_pengguna = ${normalizedEmail} 
       LIMIT 1
     `;
 
@@ -167,13 +129,24 @@ export const sendResetLink = async (email) => {
 
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
-  await sendEmail({
-    to: email,
-    subject: "Reset Password",
-    html: `
-      <p>Klik link berikut untuk reset password.</p>
-      <p>Link berlaku selama <b>10 menit</b>.</p>
-      <a href="${resetLink}">${resetLink}</a>
-    `,
-  });
+  const debugEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+
+  try {
+    await sendEmail({
+      to: normalizedEmail,
+      subject: "Reset Password",
+      html: `
+        <p>Klik link berikut untuk reset password.</p>
+        <p>Link berlaku selama <b>10 menit</b>.</p>
+        <a href="${resetLink}">${resetLink}</a>
+      `,
+    });
+  } catch (error) {
+    if (!debugEnabled) {
+      throw error;
+    }
+    console.error("Reset email send failed (debug mode enabled):", error);
+  }
+
+  return resetLink;
 };
