@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import sql from "../config/db.js";
+import https from "https";
 
 dotenv.config();
 
@@ -16,6 +17,54 @@ const transporter = nodemailer.createTransport({
 
 // 2. Simplified sendEmail function
 const sendEmail = async ({ to, subject, html }) => {
+  const gatewayUrl = process.env.EMAIL_GATEWAY_URL;
+  const gatewayApiKey = process.env.EMAIL_GATEWAY_API_KEY;
+
+  if (gatewayUrl) {
+    const payload = JSON.stringify({ to, subject, html });
+    const url = new URL(gatewayUrl);
+
+    return await new Promise((resolve, reject) => {
+      const req = https.request(
+        {
+          method: "POST",
+          hostname: url.hostname,
+          path: `${url.pathname}${url.search}`,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+            "x-api-key": gatewayApiKey || "",
+          },
+          timeout: Number(process.env.EMAIL_GATEWAY_TIMEOUT || 15000),
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              return resolve(true);
+            }
+            return reject(
+              new Error(
+                `Email gateway failed: ${res.statusCode} ${res.statusMessage} ${data}`
+              )
+            );
+          });
+        }
+      );
+
+      req.on("error", reject);
+      req.on("timeout", () => {
+        req.destroy(new Error("Email gateway request timeout"));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+  }
+
   try {
     // We use 'await' to ensure Vercel doesn't kill the process before sending
     await transporter.sendMail({
