@@ -12,6 +12,9 @@ const transporter = nodemailer.createTransport({
     user: process.env.EMAIL_USER, // Your Gmail address
     pass: process.env.EMAIL_PASSWORD, // Your 16-char App Password (NOT your login password)
   },
+  connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT || 5000),
+  greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT || 5000),
+  socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT || 8000),
 });
 
 // 2. Simplified sendEmail function
@@ -60,9 +63,10 @@ export const sendOTPService = async (email) => {
   );
 
   const debugOtpEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+  const sendAsync = process.env.EMAIL_SEND_ASYNC === "true";
 
   try {
-    await sendEmail({
+    const sendPromise = sendEmail({
       to: normalizedEmail,
       subject: "Kode Verifikasi Anda",
       html: `
@@ -71,6 +75,14 @@ export const sendOTPService = async (email) => {
         <p>Berlaku selama <b>10 menit</b>.</p>
       `,
     });
+
+    if (!sendAsync) {
+      await sendPromise;
+    } else {
+      sendPromise.catch((error) => {
+        console.error("OTP email send failed (async):", error);
+      });
+    }
   } catch (error) {
     if (!debugOtpEnabled) {
       throw error;
@@ -130,9 +142,10 @@ export const sendResetLink = async (email) => {
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${token}`;
 
   const debugEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+  const sendAsync = process.env.EMAIL_SEND_ASYNC === "true";
 
   try {
-    await sendEmail({
+    const sendPromise = sendEmail({
       to: normalizedEmail,
       subject: "Reset Password",
       html: `
@@ -141,6 +154,14 @@ export const sendResetLink = async (email) => {
         <a href="${resetLink}">${resetLink}</a>
       `,
     });
+
+    if (!sendAsync) {
+      await sendPromise;
+    } else {
+      sendPromise.catch((error) => {
+        console.error("Reset email send failed (async):", error);
+      });
+    }
   } catch (error) {
     if (!debugEnabled) {
       throw error;
