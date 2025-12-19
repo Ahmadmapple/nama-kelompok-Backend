@@ -108,9 +108,13 @@ const registerUser = async (req, res) => {
       });
     }
 
+    const debugOtpEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+    const decoded = debugOtpEnabled ? jwt.decode(otpToken) : null;
+
     return res.status(201).json({
       message: "User berhasil didaftarkan, silakan verifikasi email Anda",
       verificationToken: otpToken,
+      ...(debugOtpEnabled && decoded?.otp ? { otp: String(decoded.otp) } : {}),
     });
   } catch (error) {
     console.error("Error during user registration:", error);
@@ -183,15 +187,19 @@ const forgotPasswordController = async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
+    const debugEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+
     // Security: do not reveal user existence
+    let resetLink;
     try {
-      await sendResetLink(email);
+      resetLink = await sendResetLink(email);
     } catch (err) {
       console.log("Reset attempt:", err.message);
     }
 
     return res.json({
       message: "Jika email terdaftar, instruksi reset password akan dikirim",
+      ...(debugEnabled && resetLink ? { resetLink } : {}),
     });
   } catch (err) {
     console.error(err);
