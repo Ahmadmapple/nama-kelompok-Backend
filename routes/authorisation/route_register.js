@@ -1,4 +1,5 @@
 import express from "express";
+import jwt from "jsonwebtoken";
 import {
   registerUser,
   loginUser,
@@ -24,27 +25,25 @@ router.post("/send-otp", async (req, res) => {
   try {
     const otpToken = await sendOTPService(email);
     console.log('Send OTP - Success, token generated');
-    res.status(200).json({ 
-      message: "OTP berhasil dikirim ke email Anda", 
-      verificationToken: otpToken 
+
+    const debugOtpEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+    const decoded = debugOtpEnabled ? jwt.decode(otpToken) : null;
+
+    return res.status(200).json({
+      message: "OTP berhasil dikirim ke email Anda",
+      verificationToken: otpToken,
+      ...(debugOtpEnabled && decoded?.otp ? { otp: String(decoded.otp) } : {}),
     });
   } catch (error) {
-    const errorMessage = error?.message || "";
-    console.error("OTP gagal kirim:", errorMessage);
-
-    if (errorMessage.includes("Resend API failed: 403")) {
-      return res.status(503).json({
-        error:
-          "Layanan email belum aktif untuk kirim ke penerima lain. Jika pakai Resend, verifikasi domain di Resend dan set EMAIL_FROM menggunakan domain tersebut.",
-      });
-    }
-
+    console.error("OTP gagal kirim:", error.message);
     return res.status(500).json({ error: "Gagal mengirim OTP" });
   }
 });
 
 router.post("/verify-otp", async (req, res) => {
   const { email, otp, token } = req.body;
+
+  const normalizedEmail = (email || "").toLowerCase().trim();
 
   console.log('Verify OTP - Request:', { 
     email, 
@@ -57,13 +56,13 @@ router.post("/verify-otp", async (req, res) => {
     const isVerified = await verifiedOTPService(email, otp, token);
 
     // mark user as verified in DB
-    await sql`UPDATE pengguna SET is_verified = true WHERE email_pengguna = ${email}`;
+    await sql`UPDATE pengguna SET is_verified = true WHERE email_pengguna = ${normalizedEmail}`;
 
     console.log('Verify OTP - Success for:', email);
-    res.status(200).json({ message: "OTP Verified Successfully", isVerified });
+    return res.status(200).json({ message: "OTP Verified Successfully", isVerified });
   } catch (error) {
     console.error("OTP verification failed:", error.message);
-    res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: error.message });
   }
 });
 
