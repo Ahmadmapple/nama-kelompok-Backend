@@ -29,8 +29,17 @@ router.post("/send-otp", async (req, res) => {
       verificationToken: otpToken 
     });
   } catch (error) {
-    console.error("OTP gagal kirim:", error.message);
-    res.status(500).json({ error: "Gagal mengirim OTP" });
+    const errorMessage = error?.message || "";
+    console.error("OTP gagal kirim:", errorMessage);
+
+    if (errorMessage.includes("Resend API failed: 403")) {
+      return res.status(503).json({
+        error:
+          "Layanan email belum aktif untuk kirim ke penerima lain. Jika pakai Resend, verifikasi domain di Resend dan set EMAIL_FROM menggunakan domain tersebut.",
+      });
+    }
+
+    return res.status(500).json({ error: "Gagal mengirim OTP" });
   }
 });
 
