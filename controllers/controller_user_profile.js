@@ -40,28 +40,38 @@ const editProfile = async (req, res) => {
     let updatedUser;
 
     if (setFields.length > 0) {
-      // Tambahkan userId ke parameter terakhir
-      values.push(userId);
-
-      const query = `
-        UPDATE pengguna
-        SET ${setFields.join(", ")}
-        WHERE id_pengguna = $${values.length}
-        RETURNING id_pengguna, nama_pengguna, email_pengguna, foto_pengguna, role_pengguna
-      `;
-
-      updatedUser = await sql.query(query, values);
+      if (name && avatarUrl) {
+        updatedUser = await sql`
+          UPDATE pengguna
+          SET nama_pengguna = ${name}, foto_pengguna = ${avatarUrl}
+          WHERE id_pengguna = ${userId}
+          RETURNING id_pengguna, nama_pengguna, email_pengguna, foto_pengguna, role_pengguna
+        `;
+      } else if (name) {
+        updatedUser = await sql`
+          UPDATE pengguna
+          SET nama_pengguna = ${name}
+          WHERE id_pengguna = ${userId}
+          RETURNING id_pengguna, nama_pengguna, email_pengguna, foto_pengguna, role_pengguna
+        `;
+      } else if (avatarUrl) {
+        updatedUser = await sql`
+          UPDATE pengguna
+          SET foto_pengguna = ${avatarUrl}
+          WHERE id_pengguna = ${userId}
+          RETURNING id_pengguna, nama_pengguna, email_pengguna, foto_pengguna, role_pengguna
+        `;
+      }
     }
 
     // Jika tidak ada update atau gagal, ambil data lama
     if (!updatedUser || updatedUser.length === 0) {
-      const query = `
+      updatedUser = await sql`
         SELECT id_pengguna, nama_pengguna, email_pengguna, foto_pengguna, role_pengguna
         FROM pengguna
-        WHERE id_pengguna = $1
+        WHERE id_pengguna = ${userId}
+        LIMIT 1
       `;
-      const result = await sql.query(query, [userId]);
-      updatedUser = result;
     }
 
     const user = updatedUser[0];
