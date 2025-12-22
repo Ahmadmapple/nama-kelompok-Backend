@@ -183,20 +183,15 @@ const submitKuisResult = async (req, res) => {
     if (progressResult.length > 0) {
       const idProgres = progressResult[0].id_progres;
 
-      // 3. Cek apakah ini kuis pertama kali dikerjakan
-      const existingQuiz = await sql`
-        SELECT id_kuis FROM data_riwayat_kuis 
-        WHERE id_progres = ${idProgres} AND id_kuis = ${quizId}
-      `;
-      
-      const isFirstTime = existingQuiz.length === 0;
-
-      // 4. Tambahkan ke riwayat (gunakan ON CONFLICT untuk menghindari duplicate)
-      await sql`
+      // 3. Tambahkan ke riwayat secara atomik (hindari double-count jika request masuk 2x)
+      const insertedHistory = await sql`
         INSERT INTO data_riwayat_kuis (id_progres, id_kuis)
         VALUES (${idProgres}, ${quizId})
         ON CONFLICT (id_progres, id_kuis) DO NOTHING
+        RETURNING id_kuis
       `;
+
+      const isFirstTime = insertedHistory.length > 0;
 
       // 5. Update progress pengguna (increment kuis_diselesaikan dan tambah XP)
       const currentProgress = await sql`
@@ -223,14 +218,24 @@ const submitKuisResult = async (req, res) => {
       
       const leveledUp = newLevel > currentLevel;
 
-      await sql`
-        UPDATE data_progres_pengguna 
-        SET 
-          kuis_diselesaikan = kuis_diselesaikan + 1,
-          xp_pengguna = ${newXP},
-          level_pengguna = ${newLevel}
-        WHERE id_pengguna = ${userId}
-      `;
+      if (isFirstTime) {
+        await sql`
+          UPDATE data_progres_pengguna 
+          SET 
+            kuis_diselesaikan = kuis_diselesaikan + 1,
+            xp_pengguna = ${newXP},
+            level_pengguna = ${newLevel}
+          WHERE id_pengguna = ${userId}
+        `;
+      } else {
+        await sql`
+          UPDATE data_progres_pengguna 
+          SET 
+            xp_pengguna = ${newXP},
+            level_pengguna = ${newLevel}
+          WHERE id_pengguna = ${userId}
+        `;
+      }
 
       console.log('Progress Updated:', { 
         oldXP: currentXP, 

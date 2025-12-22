@@ -3,7 +3,6 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
-import { sendOTPService, sendResetLink } from "../../services/emailHandler.js";
 
 const registerUser = async (req, res) => {
   const {
@@ -15,6 +14,8 @@ const registerUser = async (req, res) => {
     agreeToTerms,
     newsletter,
   } = req.body;
+
+  const newsletterOptIn = newsletter === true;
 
   if (!email || !name || !role || !password || !confirmPassword) {
     return res.status(400).json({
@@ -82,39 +83,21 @@ const registerUser = async (req, res) => {
         email_pengguna,
         password_hash_pengguna,
         status_pengguna,
-        setuju_newsletter
+        setuju_newsletter,
+        is_verified
       )
       VALUES (
         ${name},
         ${normalizedEmail},
         ${hashedPassword},
         ${role},
-        ${newsletter}
+        ${newsletterOptIn},
+        ${true}
       )
     `;
 
-    let otpToken;
-    try {
-      otpToken = await sendOTPService(normalizedEmail);
-      console.log("Register - OTP Token generated for:", normalizedEmail);
-    } catch (otpError) {
-      console.error("Register - Failed to send OTP:", otpError);
-    }
-
-    if (!otpToken) {
-      return res.status(201).json({
-        message:
-          "User berhasil didaftarkan, namun gagal mengirim OTP. Silakan kirim ulang OTP.",
-      });
-    }
-
-    const debugOtpEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
-    const decoded = debugOtpEnabled ? jwt.decode(otpToken) : null;
-
     return res.status(201).json({
-      message: "User berhasil didaftarkan, silakan verifikasi email Anda",
-      verificationToken: otpToken,
-      ...(debugOtpEnabled && decoded?.otp ? { otp: String(decoded.otp) } : {}),
+      message: "User berhasil didaftarkan. Silakan login.",
     });
   } catch (error) {
     console.error("Error during user registration:", error);
@@ -134,8 +117,12 @@ const loginUser = async (req, res) => {
   const normalizedEmail = email.toLowerCase().trim();
 
   try {
-    const user =
-      await sql`SELECT id_pengguna, nama_pengguna, email_pengguna, password_hash_pengguna, role_pengguna, is_verified FROM pengguna WHERE email_pengguna = ${normalizedEmail} LIMIT 1`;
+    const user = await sql`
+      SELECT id_pengguna, nama_pengguna, email_pengguna, password_hash_pengguna, role_pengguna, status_pengguna, is_verified
+      FROM pengguna
+      WHERE email_pengguna = ${normalizedEmail}
+      LIMIT 1
+    `;
     if (user.length === 0) {
       return res.status(400).json({ message: "Email atau password salah" });
     }
@@ -145,11 +132,6 @@ const loginUser = async (req, res) => {
     );
     if (!isPasswordValid) {
       return res.status(400).json({ message: "Email atau password salah" });
-    }
-    if (!user[0].is_verified) {
-      return res.status(403).json({
-        message: "Akun belum terverifikasi. Silakan verifikasi email Anda.",
-      });
     }
 
     const payload = {
@@ -170,6 +152,8 @@ const loginUser = async (req, res) => {
         name: user[0].nama_pengguna,
         email: user[0].email_pengguna,
         role: user[0].role_pengguna,
+        status: user[0].status_pengguna,
+        is_verified: user[0].is_verified,
       },
       token: JWTtoken,
     });
@@ -187,19 +171,20 @@ const forgotPasswordController = async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    const debugEnabled = process.env.SHOW_OTP_IN_RESPONSE === "true";
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await sql`
+      SELECT id_pengguna
+      FROM pengguna
+      WHERE email_pengguna = ${normalizedEmail}
+      LIMIT 1
+    `;
 
-    // Security: do not reveal user existence
-    let resetLink;
-    try {
-      resetLink = await sendResetLink(email);
-    } catch (err) {
-      console.log("Reset attempt:", err.message);
+    if (!user.length) {
+      return res.status(404).json({ message: "Email tidak terdaftar" });
     }
 
-    return res.json({
-      message: "Jika email terdaftar, instruksi reset password akan dikirim",
-      ...(debugEnabled && resetLink ? { resetLink } : {}),
+    return res.status(200).json({
+      message: "Email valid. Silakan lanjut reset password.",
     });
   } catch (err) {
     console.error(err);
@@ -208,11 +193,11 @@ const forgotPasswordController = async (req, res) => {
 };
 
 const resetPassword = async (req, res) => {
-  const { token, newPassword, confirmPassword } = req.body;
+  const { email, newPassword, confirmPassword } = req.body;
 
-  if (!token) {
+  if (!email) {
     return res.status(400).json({
-      message: "Token tidak ditemukan",
+      message: "Email harus diisi",
     });
   }
 
@@ -253,13 +238,19 @@ const resetPassword = async (req, res) => {
   }
 
   try {
-    const decode = jwt.verify(token, process.env.JWT_SECRET);
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await sql`
+      SELECT id_pengguna
+      FROM pengguna
+      WHERE email_pengguna = ${normalizedEmail}
+      LIMIT 1
+    `;
 
-    if (decode.purpose !== "reset-password") {
-      return res.status(401).json({ message: "Token tidak valid" });
+    if (!user.length) {
+      return res.status(404).json({ message: "Email tidak terdaftar" });
     }
 
-    const userId = decode.id;
+    const userId = user[0].id_pengguna;
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     await sql`Update pengguna set password_hash_pengguna = ${hashedPassword} where id_pengguna = ${userId}`;
@@ -268,9 +259,8 @@ const resetPassword = async (req, res) => {
       message: "Password berhasil direset. silahkan login",
     });
   } catch (error) {
-    return res.status(401).json({
-      message: "token tidak valid atau telah kadaluwarsa",
-    });
+    console.error("Reset password error:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
 
