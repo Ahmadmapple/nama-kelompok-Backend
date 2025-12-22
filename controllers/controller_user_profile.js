@@ -119,7 +119,9 @@ const getExtendedProfile = async (req, res) => {
         SELECT
           ml.id_lencana AS id,
           ml.nama_lencana AS name,
+          ml.deskripsi AS description,
           ml.ikon_emoji AS icon,
+          ml.kriteria_pencapaian AS criteria,
           CASE WHEN pul.id_pengguna_lencana IS NOT NULL THEN TRUE ELSE FALSE END AS earned,
           pul.tanggal_diperoleh AS date
         FROM master_lencana ml
